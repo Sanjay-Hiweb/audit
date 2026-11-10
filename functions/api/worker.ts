@@ -1069,7 +1069,7 @@ registerRoute('POST', '/api/audits/:id/reconcile', async ({ request, env, params
       ).bind(id(), businessId, audit.branch_id, c.variant_id, after),
       env.DB.prepare(
         `INSERT INTO inventory_movements (id, business_id, branch_id, variant_id, audit_id, before_quantity, after_quantity, change_quantity, reason, adjusted_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(id(), businessId, audit.branch_id, c.variant_id, auditId, before, after, diff, `Reconciled from Audit ${audit.name}`, user.displayName)
     ]);
     adjustedCount++;

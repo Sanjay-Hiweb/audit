@@ -1,39 +1,699 @@
-import { useMemo, useState } from 'react';
-import { Activity, ArrowDownToLine, ArrowUpRight, Boxes, BriefcaseBusiness, Check, ChevronDown, CircleHelp, ClipboardCheck, FileSpreadsheet, FileText, LayoutDashboard, Menu, Package, Plus, Search, Settings, ShieldCheck, ShoppingBag, Smartphone, Users, X } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import { getAudits, getProducts, saveAudits, saveProducts } from './lib/storage';
-import type { Audit, Product } from './lib/types';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Activity,
+  ArrowDownToLine,
+  ArrowUpRight,
+  Boxes,
+  BriefcaseBusiness,
+  Building,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  CircleHelp,
+  ClipboardCheck,
+  FileSpreadsheet,
+  FileText,
+  KeyRound,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Moon,
+  Package,
+  PackagePlus,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+  ShoppingBag,
+  Smartphone,
+  Sun,
+  Users,
+  X,
+  Zap
+} from 'lucide-react';
+import { api, getStoredTheme, getStoredToken, setStoredTheme, setStoredToken } from './lib/api';
+import type { UserSession } from './lib/api';
+import { PublicWebsite } from './components/PublicWebsite';
+import { AuthModal } from './components/AuthModal';
+import { EmployeeWorkspace } from './components/EmployeeWorkspace';
+import { AuditDetailView } from './components/AuditDetailView';
+import { ProductCatalogueView } from './components/ProductCatalogueView';
+import { InventoryView } from './components/InventoryView';
+import { EmployeeManagementView } from './components/EmployeeManagementView';
+import { ProductRequestsView } from './components/ProductRequestsView';
+import { SettingsView } from './components/SettingsView';
 
-export default function App(){
- const [page,setPage]=useState('Overview'); const [products,setProducts]=useState<Product[]>(getProducts); const [audits,setAudits]=useState<Audit[]>(getAudits); const [query,setQuery]=useState(''); const [modal,setModal]=useState<'product'|'audit'|null>(null); const [productForm,setProductForm]=useState({name:'',sku:'',category:'General',brand:'',variant:'',expected:'0',unit:'pcs'}); const [auditName,setAuditName]=useState('Monthly stock check'); const [activeAudit,setActiveAudit]=useState<string|null>(null); const [mobileMenu,setMobileMenu]=useState(false); const [toast,setToast]=useState('');
- const notify=(s:string)=>{setToast(s);window.setTimeout(()=>setToast(''),2600)};
- const totalExpected=products.reduce((s,p)=>s+p.expected,0); const active=audits.filter(a=>a.status!=='Approved').length; const counted=audits.reduce((s,a)=>s+a.counts.length,0);
- const filtered=useMemo(()=>products.filter(p=>[p.name,p.sku,p.category,p.brand,p.variant].join(' ').toLowerCase().includes(query.toLowerCase())),[products,query]);
- const updateProducts=(p:Product[])=>{setProducts(p);saveProducts(p)}; const updateAudits=(a:Audit[])=>{setAudits(a);saveAudits(a)};
- const addProduct=()=>{if(!productForm.name.trim()){notify('Enter a product name');return;}const p:Product={...productForm,id:crypto.randomUUID(),expected:Math.max(0,Number(productForm.expected)||0)};updateProducts([p,...products]);setModal(null);setProductForm({name:'',sku:'',category:'General',brand:'',variant:'',expected:'0',unit:'pcs'});notify('Product added');};
- const createAudit=()=>{if(!auditName.trim())return;const a:Audit={id:crypto.randomUUID(),name:auditName,code:Math.random().toString(36).slice(2,8).toUpperCase(),status:'In progress',createdAt:new Date().toISOString(),counts:[]};updateAudits([a,...audits]);setActiveAudit(a.id);setModal(null);setPage('Audits');notify('Audit created. Share its code with your team.');};
- const recordCount=(auditId:string,productId:string,quantity:number)=>{const next=audits.map(a=>a.id===auditId?{...a,counts:[...a.counts.filter(c=>c.productId!==productId),{productId,quantity,countedBy:'Owner / Demo user',countedAt:new Date().toISOString()}]}:a);updateAudits(next);};
- const exportExcel=()=>{const rows=products.map(p=>{const c=audits.flatMap(a=>a.counts).find(c=>c.productId===p.id);const actual=c?.quantity;return {'SKU':p.sku,'Product':p.name,'Category':p.category,'Brand':p.brand,'Variant':p.variant,'Expected':p.expected,'Counted':actual??'', 'Variance':actual===undefined?'':actual-p.expected,'Status':actual===undefined?'Not counted':actual<p.expected?'Shortage':actual>p.expected?'Excess':'Matched'};});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Stock audit');XLSX.writeFile(wb,'stock-audit-report.xlsx');};
- const exportPDF=()=>{const doc=new jsPDF();doc.setFontSize(18);doc.text('Retail Stock Audit Report',14,18);doc.setFontSize(10);doc.text(`Generated ${new Date().toLocaleString()}`,14,26);const rows=products.map(p=>{const c=audits.flatMap(a=>a.counts).find(c=>c.productId===p.id);return [p.sku,p.name,p.variant,p.expected,c?.quantity??'—',c?c.quantity-p.expected:'—'];});autoTable(doc,{startY:32,head:[['SKU','Product','Variant','Expected','Counted','Variance']],body:rows,styles:{fontSize:8}});doc.save('stock-audit-report.pdf');};
- const importExcel=(file:File)=>{const reader=new FileReader();reader.onload=e=>{try{const wb=XLSX.read(e.target?.result,{type:'array'});const rows=XLSX.utils.sheet_to_json<Record<string,unknown>>(wb.Sheets[wb.SheetNames[0]]);const incoming:Product[]=rows.map((r,i)=>({id:crypto.randomUUID(),sku:String(r.SKU??r.sku??`IMP-${i+1}`),name:String(r.Product??r.Name??r.name??''),category:String(r.Category??r.category??'General'),brand:String(r.Brand??r.brand??''),variant:String(r.Variant??r.variant??''),expected:Number(r.Expected??r.Quantity??r.expected??0),unit:String(r.Unit??r.unit??'pcs')})).filter(p=>p.name.trim());if(!incoming.length){notify('No valid product rows found');return;}updateProducts([...incoming,...products]);notify(`${incoming.length} products imported`);}catch{notify('Could not read this file. Use the sample column names.')}};reader.readAsArrayBuffer(file);};
- const nav=[{name:'Overview',icon:LayoutDashboard},{name:'Products',icon:Package},{name:'Audits',icon:ClipboardCheck},{name:'Reports',icon:FileText},{name:'Team & access',icon:Users},{name:'Settings',icon:Settings}];
- return <div className="app-shell"><aside className={`sidebar ${mobileMenu?'open':''}`}><div className="brand"><div className="brand-mark"><Boxes size={21}/></div><div><b>countly</b><small>RETAIL AUDIT</small></div><button className="icon-btn close-menu" onClick={()=>setMobileMenu(false)}><X/></button></div><div className="business-switch"><div className="business-avatar">S</div><div className="business-copy"><b>Sample Store</b><small>Owner workspace</small></div><ChevronDown size={15}/></div><div className="nav-label">WORKSPACE</div><nav>{nav.map(n=><button key={n.name} className={`nav-item ${page===n.name?'selected':''}`} onClick={()=>{setPage(n.name);setMobileMenu(false)}}><n.icon size={18}/><span>{n.name}</span>{n.name==='Audits'&&active>0&&<i>{active}</i>}</button>)}</nav><div className="sidebar-bottom"><div className="help-card"><CircleHelp size={18}/><b>Need a hand?</b><span>Learn how to run your first audit.</span><button onClick={()=>notify('Help guide coming soon')}>Open help <ArrowUpRight size={13}/></button></div><div className="profile"><div className="profile-avatar">SK</div><div><b>Store Owner</b><small>Demo workspace</small></div><ChevronDown size={15}/></div></div></aside>
- <main className="main"><header className="topbar"><button className="icon-btn menu-toggle" onClick={()=>setMobileMenu(true)}><Menu/></button><div className="breadcrumb">Workspace <span>/</span> <b>{page}</b></div><div className="top-actions"><span className="secure"><ShieldCheck size={15}/> Demo mode</span><button className="avatar-small">SK</button></div></header>
- <div className="content">{page==='Overview'&&<><div className="page-heading"><div><div className="eyebrow">WEDNESDAY, NOVEMBER 4, 2026</div><h1>Good morning, Store Owner <span>✦</span></h1><p>Here’s what’s happening with your stock today.</p></div><button className="primary-btn" onClick={()=>setModal('audit')}><Plus size={17}/> Start an audit</button></div><div className="stat-grid"><Stat icon={<Package/>} label="Products in catalogue" value={products.length.toLocaleString()} note="Across all categories"/><Stat icon={<Boxes/>} label="Expected stock" value={totalExpected.toLocaleString()} note="Total units recorded"/><Stat icon={<Activity/>} label="Audits in progress" value={String(active)} note="Awaiting completion"/><Stat icon={<ClipboardCheck/>} label="Count entries" value={String(counted)} note="Across saved audits"/></div><div className="overview-grid"><section className="panel recent-panel"><div className="panel-heading"><div><h2>Recent audits</h2><p>Track your stock checks</p></div><button className="text-btn" onClick={()=>setPage('Audits')}>View all <ArrowUpRight size={14}/></button></div>{audits.length===0?<Empty icon={<ClipboardCheck/>} title="No audits yet" text="Start your first stock audit and invite your team to count." action="Create an audit" onClick={()=>setModal('audit')}/>:audits.slice(0,5).map(a=><div className="audit-row" key={a.id}><div className="row-icon"><ClipboardCheck size={18}/></div><div className="row-main"><b>{a.name}</b><small>{new Date(a.createdAt).toLocaleDateString()} · Code {a.code}</small></div><span className={`status ${a.status==='Approved'?'approved':a.status==='Review'?'review':'progress'}`}>{a.status}</span><button className="subtle-btn" onClick={()=>{setActiveAudit(a.id);setPage('Audits')}}>Open</button></div>)}</section><section className="panel quick-panel"><div className="panel-heading"><div><h2>Quick actions</h2><p>Common tasks, one tap away</p></div></div><button className="quick-action" onClick={()=>setModal('product')}><div className="quick-icon purple"><Plus/></div><span><b>Add a product</b><small>Create a product or variant</small></span><ArrowUpRight size={16}/></button><label className="quick-action import-action"><div className="quick-icon green"><FileSpreadsheet/></div><span><b>Import stock list</b><small>Upload an Excel or CSV file</small></span><ArrowUpRight size={16}/><input type="file" accept=".xlsx,.xls,.csv" onChange={e=>e.target.files?.[0]&&importExcel(e.target.files[0])}/></label><button className="quick-action" onClick={exportPDF}><div className="quick-icon orange"><FileText/></div><span><b>Download report</b><small>Export product stock overview</small></span><ArrowUpRight size={16}/></button></section></div><section className="panel product-preview"><div className="panel-heading"><div><h2>Product catalogue</h2><p>Your stock, clearly organized in one place</p></div><button className="text-btn" onClick={()=>setPage('Products')}>All products <ArrowUpRight size={14}/></button></div><ProductTable products={products.slice(0,5)} counts={audits.flatMap(a=>a.counts)}/></section></>}
- {page==='Products'&&<><div className="page-heading"><div><div className="eyebrow">INVENTORY</div><h1>Product catalogue</h1><p>Manage products, variants and expected quantities.</p></div><button className="primary-btn" onClick={()=>setModal('product')}><Plus size={17}/> Add product</button></div><div className="toolbar"><div className="search-box"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search product, SKU, category..."/></div><label className="secondary-btn upload-label"><FileSpreadsheet size={16}/> Import Excel<input type="file" accept=".xlsx,.xls,.csv" onChange={e=>e.target.files?.[0]&&importExcel(e.target.files[0])}/></label><button className="secondary-btn" onClick={exportExcel}><ArrowDownToLine size={16}/> Export</button></div><section className="panel table-panel"><div className="panel-heading"><div><h2>All products <span className="count-pill">{filtered.length}</span></h2><p>Expected stock is your reference quantity before the physical count.</p></div></div><ProductTable products={filtered} counts={audits.flatMap(a=>a.counts)} full/></section></>}
- {page==='Audits'&&<><div className="page-heading"><div><div className="eyebrow">STOCK CONTROL</div><h1>Stock audits</h1><p>Create a count, share access with employees, and review results.</p></div><button className="primary-btn" onClick={()=>setModal('audit')}><Plus size={17}/> New audit</button></div>{audits.length===0?<section className="panel"><Empty icon={<ClipboardCheck/>} title="Your audit list is empty" text="Create an audit to start counting products and tracking stock differences." action="Create first audit" onClick={()=>setModal('audit')}/></section>:<div className="audit-cards">{audits.map(a=><section className="panel audit-card" key={a.id}><div className="audit-card-top"><div className="row-icon"><ClipboardCheck/></div><span className={`status ${a.status==='Approved'?'approved':a.status==='Review'?'review':'progress'}`}>{a.status}</span></div><h3>{a.name}</h3><p>Created {new Date(a.createdAt).toLocaleString()}</p><div className="code-box"><div><small>EMPLOYEE JOIN CODE</small><b>{a.code}</b></div><button className="secondary-btn small" onClick={()=>{navigator.clipboard?.writeText(a.code);notify('Audit code copied')}}>Copy code</button></div><div className="audit-progress"><span>{a.counts.length} of {products.length} products counted</span><div className="progress-track"><i style={{width:`${products.length?Math.min(100,a.counts.length/products.length*100):0}%`}}/></div></div><button className="primary-btn full-btn" onClick={()=>{setActiveAudit(a.id);setPage('Audit detail')}}>Open audit <ArrowUpRight size={15}/></button></section>)}</div>}</>}
- {page==='Audit detail'&&<AuditDetail audit={audits.find(a=>a.id===activeAudit)||audits[0]} products={products} onCount={recordCount} onStatus={(id,status)=>updateAudits(audits.map(a=>a.id===id?{...a,status}:a))} onBack={()=>setPage('Audits')} notify={notify}/>}
- {page==='Reports'&&<><div className="page-heading"><div><div className="eyebrow">INSIGHTS & EXPORTS</div><h1>Reports</h1><p>Review stock differences and download audit records.</p></div><div className="button-row"><button className="secondary-btn" onClick={exportPDF}><FileText size={16}/> PDF</button><button className="primary-btn" onClick={exportExcel}><FileSpreadsheet size={16}/> Excel</button></div></div><div className="stat-grid report-stats"><Stat icon={<Boxes/>} label="Expected units" value={totalExpected.toLocaleString()} note="Current product catalogue"/><Stat icon={<ClipboardCheck/>} label="Audits created" value={String(audits.length)} note="All audit sessions"/><Stat icon={<Check/>} label="Approved audits" value={String(audits.filter(a=>a.status==='Approved').length)} note="Finalized records"/><Stat icon={<Activity/>} label="Count records" value={String(counted)} note="Submitted in demo"/></div><section className="panel table-panel"><div className="panel-heading"><div><h2>Stock position</h2><p>Latest saved count per product. Uncounted items are shown separately.</p></div><button className="secondary-btn" onClick={exportExcel}><ArrowDownToLine size={15}/> Export report</button></div><ProductTable products={products} counts={audits.flatMap(a=>a.counts)} full/></section></>}
- {page==='Team & access'&&<><div className="page-heading"><div><div className="eyebrow">PEOPLE & PERMISSIONS</div><h1>Team & access</h1><p>Employee access is granted per audit, not across the whole business.</p></div></div><section className="panel info-panel"><div className="info-icon"><Smartphone/></div><h2>Employees join with an audit code</h2><p>For the production version, each employee should receive a scoped invite or PIN. An audit code by itself is shareable and should not be treated as verified employee identity.</p><button className="secondary-btn" onClick={()=>setPage('Audits')}>Manage audit access</button></section></>}
- {page==='Settings'&&<><div className="page-heading"><div><div className="eyebrow">WORKSPACE</div><h1>Business settings</h1><p>Business profile and workspace preferences.</p></div></div><section className="panel settings-panel"><div className="settings-logo"><BriefcaseBusiness/></div><div><h2>Sample Store</h2><p>Demo business · Owner workspace</p></div><span className="status review">Demo mode</span><div className="settings-note">This starter project currently stores demo data in this browser only. Connect the Cloudflare Worker and D1 database before using it with real businesses or employees.</div></section></>}
- </div></main>{mobileMenu&&<button className="scrim" onClick={()=>setMobileMenu(false)} aria-label="Close menu"/>}{toast&&<div className="toast"><Check size={16}/>{toast}</div>}
- {modal&&<div className="modal-backdrop" onClick={()=>setModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><h2>{modal==='product'?'Add a product':'Create a stock audit'}</h2><p>{modal==='product'?'Add a product to your business catalogue.':'Set up a new physical stock count.'}</p></div><button className="icon-btn" onClick={()=>setModal(null)}><X/></button></div>{modal==='product'?<div className="form-grid"><Field label="Product name *"><input value={productForm.name} onChange={e=>setProductForm({...productForm,name:e.target.value})} placeholder="e.g. Classic cotton shirt"/></Field><Field label="SKU / product code"><input value={productForm.sku} onChange={e=>setProductForm({...productForm,sku:e.target.value})} placeholder="e.g. SH-001"/></Field><Field label="Category"><input value={productForm.category} onChange={e=>setProductForm({...productForm,category:e.target.value})} placeholder="e.g. Clothing"/></Field><Field label="Brand"><input value={productForm.brand} onChange={e=>setProductForm({...productForm,brand:e.target.value})} placeholder="Optional"/></Field><Field label="Variant / attributes"><input value={productForm.variant} onChange={e=>setProductForm({...productForm,variant:e.target.value})} placeholder="e.g. Blue / Medium"/></Field><Field label="Expected quantity"><input type="number" min="0" value={productForm.expected} onChange={e=>setProductForm({...productForm,expected:e.target.value})}/></Field><Field label="Unit"><select value={productForm.unit} onChange={e=>setProductForm({...productForm,unit:e.target.value})}><option>pcs</option><option>pairs</option><option>boxes</option><option>kg</option><option>litres</option><option>units</option></select></Field></div>:<div className="form-grid single"><Field label="Audit name"><input value={auditName} onChange={e=>setAuditName(e.target.value)} placeholder="e.g. November full stock count"/></Field><div className="form-hint"><ShieldCheck size={17}/> A unique join code will be created. Employees should also receive an individual PIN or invite in the production setup.</div></div>}<div className="modal-actions"><button className="secondary-btn" onClick={()=>setModal(null)}>Cancel</button><button className="primary-btn" onClick={modal==='product'?addProduct:createAudit}>{modal==='product'?'Save product':'Create audit'}</button></div></div></div>}
- </div>;
+export default function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(getStoredTheme);
+  const [user, setUser] = useState<UserSession['user'] | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  // App navigation
+  const [page, setPage] = useState<string>('Overview');
+  const [activeAuditId, setActiveAuditId] = useState<string | null>(null);
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [toast, setToast] = useState('');
+
+  // Modals
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [createAuditModalOpen, setCreateAuditModalOpen] = useState(false);
+
+  // Business state
+  const [activeBusinessIndex, setActiveBusinessIndex] = useState(0);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+  const [categories, setCategories] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [audits, setAudits] = useState<any[]>([]);
+
+  // Create Audit form state
+  const [auditName, setAuditName] = useState('November Store Stock Count');
+  const [auditDesc, setAuditDesc] = useState('');
+  const [creatingAudit, setCreatingAudit] = useState(false);
+
+  const notify = (msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(''), 3000);
+  };
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    setStoredTheme(next);
+  };
+
+  // Sync theme class on mount
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+
+  // Check existing authenticated user on boot
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      setInitialLoading(false);
+      return;
+    }
+
+    api.me()
+      .then(res => {
+        setUser(res.user);
+      })
+      .catch(() => {
+        setStoredToken(null);
+        setUser(null);
+      })
+      .finally(() => {
+        setInitialLoading(false);
+      });
+  }, []);
+
+  const activeBusiness = user?.businesses[activeBusinessIndex] || user?.businesses[0];
+
+  // Load business resources
+  const loadBusinessData = async () => {
+    if (!activeBusiness) return;
+    try {
+      const [branchRes, catRes, prodRes, auditRes] = await Promise.all([
+        api.getBranches(activeBusiness.id),
+        api.getCategories(activeBusiness.id),
+        api.getProducts(activeBusiness.id, selectedBranchId || undefined),
+        api.getAudits(activeBusiness.id)
+      ]);
+
+      setBranches(branchRes.branches);
+      if (!selectedBranchId && branchRes.branches.length) {
+        setSelectedBranchId(branchRes.branches[0].id);
+      }
+      setCategories(catRes.categories);
+      setProducts(prodRes.products);
+      setAudits(auditRes.audits);
+    } catch (err: any) {
+      console.error('Failed to load business data:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeBusiness) {
+      loadBusinessData();
+    }
+  }, [activeBusiness?.id, selectedBranchId]);
+
+  const handleLogout = async () => {
+    await api.logout();
+    setUser(null);
+    setPage('Overview');
+    notify('Signed out successfully');
+  };
+
+  const handleCreateAudit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!auditName.trim() || !activeBusiness) return;
+
+    setCreatingAudit(true);
+    try {
+      const res = await api.createAudit({
+        businessId: activeBusiness.id,
+        branchId: selectedBranchId || branches[0]?.id,
+        name: auditName.trim(),
+        description: auditDesc.trim() || undefined
+      });
+
+      notify(`Audit created! Join Code: ${res.joinCode} (${res.lineCount} items snapshotted)`);
+      setCreateAuditModalOpen(false);
+      setAuditName('');
+      setAuditDesc('');
+      await loadBusinessData();
+      setActiveAuditId(res.auditId);
+      setPage('AuditDetail');
+    } catch (err: any) {
+      notify(err?.message || 'Failed to create audit');
+    } finally {
+      setCreatingAudit(false);
+    }
+  };
+
+  // If in dedicated Employee Workspace mode
+  if (page === 'EmployeeWorkspace') {
+    return (
+      <EmployeeWorkspace
+        onBackToHome={() => setPage('Overview')}
+        notify={notify}
+      />
+    );
+  }
+
+  // If unauthenticated, show public marketing website
+  if (!user && !initialLoading) {
+    return (
+      <>
+        <PublicWebsite
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onStartAuditing={() => { setAuthMode('register'); setAuthModalOpen(true); }}
+          onSignIn={() => { setAuthMode('login'); setAuthModalOpen(true); }}
+          onJoinEmployee={() => setPage('EmployeeWorkspace')}
+          onTryDemo={async () => {
+            try {
+              const res = await api.demoLogin('owner');
+              setStoredToken(res.token);
+              setUser(res.user);
+              notify('Welcome to Countly Demo Store!');
+            } catch {
+              setAuthMode('login');
+              setAuthModalOpen(true);
+            }
+          }}
+        />
+        <AuthModal
+          isOpen={authModalOpen}
+          initialMode={authMode}
+          onClose={() => setAuthModalOpen(false)}
+          onSuccess={sess => setUser(sess.user)}
+          onOpenEmployeeJoin={() => { setAuthModalOpen(false); setPage('EmployeeWorkspace'); }}
+          notify={notify}
+        />
+        {toast && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-2xl border border-slate-800 text-xs flex items-center gap-2">
+            <CheckCircle2 size={16} className="text-emerald-400" />
+            <span>{toast}</span>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // Navigation Items
+  const navItems = [
+    { name: 'Overview', icon: LayoutDashboard },
+    { name: 'Products', icon: Package },
+    { name: 'Inventory', icon: Boxes },
+    { name: 'Audits', icon: ClipboardCheck },
+    { name: 'Employees', icon: Users },
+    { name: 'Approvals', icon: PackagePlus },
+    { name: 'Settings', icon: Settings }
+  ];
+
+  const activeAuditsCount = audits.filter(a => a.status === 'active' || a.status === 'review').length;
+  const totalStockUnits = products.reduce((sum, p) =>
+    sum + p.variants.reduce((s: number, v: any) => s + (v.expected_quantity || 0), 0), 0);
+
+  return (
+    <div className={`min-h-screen ${theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'} flex transition-colors duration-200`}>
+      {/* Mobile Drawer Scrim */}
+      {mobileMenu && (
+        <div
+          onClick={() => setMobileMenu(false)}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
+        />
+      )}
+
+      {/* Sidebar Navigation */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-64 ${theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'} border-r flex flex-col p-4 transition-transform duration-200 lg:translate-x-0 ${mobileMenu ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        {/* Brand */}
+        <div className="flex items-center justify-between px-2 py-3 mb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-md shadow-emerald-500/20">
+              <Boxes size={20} />
+            </div>
+            <div>
+              <span className="font-black text-lg tracking-tight block">countly</span>
+              <span className="text-[9px] font-extrabold tracking-widest text-emerald-600 uppercase block -mt-1">RETAIL AUDIT</span>
+            </div>
+          </div>
+          <button onClick={() => setMobileMenu(false)} className="lg:hidden text-slate-400 hover:text-white">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Business Selector */}
+        <div className={`p-3 rounded-2xl border mb-5 ${theme === 'dark' ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Active Store</div>
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-600 font-extrabold text-xs flex items-center justify-center">
+              {activeBusiness?.name?.[0] || 'S'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="font-extrabold text-xs truncate">{activeBusiness?.name || 'My Store'}</div>
+              <div className="text-[10px] text-slate-500 capitalize">{activeBusiness?.role || 'Owner'} Workspace</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav Links */}
+        <nav className="space-y-1 flex-1">
+          {navItems.map(item => {
+            const isSelected = page === item.name || (item.name === 'Audits' && page === 'AuditDetail');
+            return (
+              <button
+                key={item.name}
+                onClick={() => {
+                  setPage(item.name);
+                  if (item.name === 'Audits') setActiveAuditId(null);
+                  setMobileMenu(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${isSelected ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30' : theme === 'dark' ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <item.icon size={17} />
+                  <span>{item.name}</span>
+                </div>
+                {item.name === 'Audits' && activeAuditsCount > 0 && (
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${isSelected ? 'bg-white text-emerald-700' : 'bg-emerald-500/10 text-emerald-600'}`}>
+                    {activeAuditsCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Employee Workspace Switcher */}
+        <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
+          <button
+            onClick={() => setPage('EmployeeWorkspace')}
+            className="w-full py-2.5 px-3 rounded-xl border border-dashed border-emerald-500/40 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-center gap-2 hover:bg-emerald-500/10 transition-colors"
+          >
+            <Smartphone size={15} />
+            <span>Open Mobile Staff Counter</span>
+          </button>
+
+          <div className="flex items-center justify-between pt-2">
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              title="Toggle theme"
+            >
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 rounded-lg text-slate-400 hover:text-rose-500"
+              title="Sign Out"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="flex-1 lg:ml-64 flex flex-col min-w-0">
+        {/* Top Header */}
+        <header className={`h-16 border-b ${theme === 'dark' ? 'bg-slate-950/80 border-slate-800' : 'bg-white/80 border-slate-200'} backdrop-blur-md px-4 sm:px-8 flex items-center justify-between sticky top-0 z-30`}>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setMobileMenu(true)}
+              className="lg:hidden p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-white"
+            >
+              <Menu size={20} />
+            </button>
+            <div className="text-xs text-slate-400 font-medium hidden sm:block">
+              {activeBusiness?.name} <span className="px-1 text-slate-300">/</span> <strong className="text-slate-800 dark:text-slate-200">{page}</strong>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setCreateAuditModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm shadow-emerald-600/20 flex items-center gap-1.5 transition-all"
+            >
+              <Plus size={15} />
+              <span>Start Audit</span>
+            </button>
+          </div>
+        </header>
+
+        {/* View Router */}
+        <main className="p-4 sm:p-8 max-w-7xl mx-auto w-full">
+          {page === 'Overview' && (
+            <div className="space-y-6">
+              {/* Welcome Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                    Store Audit Dashboard
+                  </h1>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Live inventory baselines, employee counting progress, and discrepancy reconciliation
+                  </p>
+                </div>
+                <button
+                  onClick={() => setCreateAuditModalOpen(true)}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 self-start sm:self-auto"
+                >
+                  <Plus size={15} />
+                  <span>Dispatch New Audit</span>
+                </button>
+              </div>
+
+              {/* KPI Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase">Products</span>
+                    <Package size={16} className="text-emerald-600" />
+                  </div>
+                  <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{products.length}</div>
+                  <span className="text-[10px] text-slate-400">Catalogue items</span>
+                </div>
+
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase">Expected Units</span>
+                    <Boxes size={16} className="text-blue-600" />
+                  </div>
+                  <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{totalStockUnits}</div>
+                  <span className="text-[10px] text-slate-400">Total catalogue units</span>
+                </div>
+
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase">Active Audits</span>
+                    <Activity size={16} className="text-amber-500" />
+                  </div>
+                  <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{activeAuditsCount}</div>
+                  <span className="text-[10px] text-slate-400">In-progress sessions</span>
+                </div>
+
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase">Total Audits</span>
+                    <ClipboardCheck size={16} className="text-purple-600" />
+                  </div>
+                  <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{audits.length}</div>
+                  <span className="text-[10px] text-slate-400">Historical records</span>
+                </div>
+              </div>
+
+              {/* Active / Recent Audits Section */}
+              <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Active & Recent Audits</h3>
+                    <p className="text-xs text-slate-500">Click any audit to inspect live counts and reconcile discrepancies</p>
+                  </div>
+                  <button onClick={() => setPage('Audits')} className="text-xs font-bold text-emerald-600 hover:underline">
+                    View All Audits →
+                  </button>
+                </div>
+
+                <div className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                  {audits.length === 0 ? (
+                    <div className="text-center py-8 text-slate-400 text-xs">
+                      No audits created yet. Click "Start Audit" above to run your first physical stock count.
+                    </div>
+                  ) : (
+                    audits.slice(0, 5).map(a => (
+                      <div
+                        key={a.id}
+                        onClick={() => { setActiveAuditId(a.id); setPage('AuditDetail'); }}
+                        className="py-3.5 flex items-center justify-between gap-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/30 px-2 rounded-xl transition-colors"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 text-emerald-600 flex items-center justify-center shrink-0">
+                            <ClipboardCheck size={18} />
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="font-bold text-xs text-slate-900 dark:text-white truncate">{a.name}</h4>
+                            <p className="text-[11px] text-slate-400">
+                              Join Code: <strong className="font-mono text-emerald-600">{a.join_code}</strong> · Branch: {a.branch_name}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${a.status === 'approved' ? 'bg-emerald-500/10 text-emerald-600' : a.status === 'review' ? 'bg-amber-500/10 text-amber-600' : 'bg-blue-500/10 text-blue-600'}`}
+                          >
+                            {a.status}
+                          </span>
+                          <span className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-white">
+                            Inspect →
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {page === 'Audits' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Stock Audits</h1>
+                  <p className="text-xs text-slate-500 mt-0.5">Physical stock counting sessions, team join codes, and approval workflows</p>
+                </div>
+                <button
+                  onClick={() => setCreateAuditModalOpen(true)}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5"
+                >
+                  <Plus size={15} />
+                  <span>Start New Audit</span>
+                </button>
+              </div>
+
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {audits.map(a => (
+                  <div
+                    key={a.id}
+                    className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 hover:border-slate-300 dark:hover:border-slate-700 transition-all flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Branch: {a.branch_name}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${a.status === 'approved' ? 'bg-emerald-500/10 text-emerald-600' : a.status === 'review' ? 'bg-amber-500/10 text-amber-600' : 'bg-blue-500/10 text-blue-600'}`}
+                        >
+                          {a.status}
+                        </span>
+                      </div>
+                      <h3 className="font-extrabold text-base text-slate-900 dark:text-white">{a.name}</h3>
+                      <p className="text-xs text-slate-500 mt-1">Created {new Date(a.created_at).toLocaleDateString()}</p>
+                    </div>
+
+                    <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                      <div>
+                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Staff Join Code</span>
+                        <span className="text-lg font-black font-mono tracking-widest text-emerald-600">{a.join_code}</span>
+                      </div>
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(a.join_code); notify('Join code copied!'); }}
+                        className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1"
+                        title="Copy Code"
+                      >
+                        <KeyRound size={16} />
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => { setActiveAuditId(a.id); setPage('AuditDetail'); }}
+                      className="w-full py-2.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all"
+                    >
+                      <span>Open Reconciliation Hub</span>
+                      <ArrowUpRight size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {page === 'AuditDetail' && activeAuditId && activeBusiness && (
+            <AuditDetailView
+              auditId={activeAuditId}
+              businessId={activeBusiness.id}
+              onBack={() => setPage('Audits')}
+              notify={notify}
+            />
+          )}
+
+          {page === 'Products' && activeBusiness && (
+            <ProductCatalogueView
+              businessId={activeBusiness.id}
+              branchId={selectedBranchId}
+              products={products}
+              categories={categories}
+              onRefresh={loadBusinessData}
+              notify={notify}
+            />
+          )}
+
+          {page === 'Inventory' && activeBusiness && (
+            <InventoryView
+              businessId={activeBusiness.id}
+              branches={branches}
+              selectedBranchId={selectedBranchId}
+              onSelectBranch={setSelectedBranchId}
+              notify={notify}
+            />
+          )}
+
+          {page === 'Employees' && activeBusiness && (
+            <EmployeeManagementView
+              businessId={activeBusiness.id}
+              audits={audits}
+              notify={notify}
+            />
+          )}
+
+          {page === 'Approvals' && activeBusiness && (
+            <ProductRequestsView
+              businessId={activeBusiness.id}
+              notify={notify}
+            />
+          )}
+
+          {page === 'Settings' && activeBusiness && (
+            <SettingsView
+              business={activeBusiness}
+              branches={branches}
+              theme={theme}
+              onToggleTheme={toggleTheme}
+              onRefresh={loadBusinessData}
+              notify={notify}
+            />
+          )}
+        </main>
+      </div>
+
+      {/* Create Audit Modal */}
+      {createAuditModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-extrabold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                <ClipboardCheck size={18} className="text-emerald-600" />
+                <span>Start Stock Audit</span>
+              </h3>
+              <button onClick={() => setCreateAuditModalOpen(false)} className="text-slate-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Dispatching an audit creates an <strong>immutable baseline snapshot</strong> of your current catalogue. Changes to current inventory while this audit is active will never alter the frozen audit baseline.
+            </p>
+
+            <form onSubmit={handleCreateAudit} className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Audit Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={auditName}
+                  onChange={e => setAuditName(e.target.value)}
+                  placeholder="e.g. Month-End Stock Reconciliation"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Branch Location
+                </label>
+                <select
+                  value={selectedBranchId}
+                  onChange={e => setSelectedBranchId(e.target.value)}
+                  className="w-full px-2.5 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  {branches.map(br => (
+                    <option key={br.id} value={br.id}>{br.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Instructions / Notes (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={auditDesc}
+                  onChange={e => setAuditDesc(e.target.value)}
+                  placeholder="e.g. Count front sales floor before storeroom"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateAuditModalOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingAudit}
+                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20"
+                >
+                  {creatingAudit ? 'Freezing Snapshot...' : 'Create & Snapshot'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-2xl border border-slate-800 text-xs flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-400" />
+          <span>{toast}</span>
+        </div>
+      )}
+    </div>
+  );
 }
-function Stat({icon,label,value,note}:{icon:React.ReactNode;label:string;value:string;note:string}){return <div className="stat-card"><div className="stat-top"><span>{label}</span><div className="stat-icon">{icon}</div></div><strong>{value}</strong><small>{note}</small></div>}
-function Empty({icon,title,text,action,onClick}:{icon:React.ReactNode;title:string;text:string;action:string;onClick:()=>void}){return <div className="empty-state"><div className="empty-icon">{icon}</div><h3>{title}</h3><p>{text}</p><button className="primary-btn" onClick={onClick}><Plus size={16}/>{action}</button></div>}
-function ProductTable({products,counts,full=false}:{products:Product[];counts:{productId:string;quantity:number}[];full?:boolean}){return <div className="table-wrap"><table><thead><tr><th>PRODUCT</th><th>CATEGORY</th><th>VARIANT</th><th>EXPECTED</th><th>COUNTED</th><th>VARIANCE</th></tr></thead><tbody>{products.map(p=>{const c=[...counts].reverse().find(x=>x.productId===p.id);const v=c?c.quantity-p.expected:null;return <tr key={p.id}><td><div className="product-cell"><div className="product-thumb"><ShoppingBag size={16}/></div><div><b>{p.name}</b><small>{p.sku||'No SKU'}{p.brand?` · ${p.brand}`:''}</small></div></div></td><td><span className="category-tag">{p.category}</span></td><td>{p.variant||'—'}</td><td className="numeric">{p.expected} <small>{p.unit}</small></td><td className="numeric">{c?c.quantity:<span className="muted">Not counted</span>}</td><td>{v===null?<span className="muted">—</span>:v===0?<span className="variance match">Matched</span>:v<0?<span className="variance shortage">{v} {p.unit}</span>:<span className="variance excess">+{v} {p.unit}</span>}</td></tr>})}</tbody></table>{products.length===0&&<div className="no-results">No products match your search.</div>}</div>}
-function Field({label,children}:{label:string;children:React.ReactNode}){return <label className="field"><span>{label}</span>{children}</label>}
-function AuditDetail({audit,products,onCount,onStatus,onBack,notify}:{audit?:Audit;products:Product[];onCount:(a:string,p:string,q:number)=>void;onStatus:(id:string,s:Audit['status'])=>void;onBack:()=>void;notify:(s:string)=>void}){const [vals,setVals]=useState<Record<string,string>>({});if(!audit)return <section className="panel"><Empty icon={<ClipboardCheck/>} title="No audit selected" text="Create an audit first." action="Back to audits" onClick={onBack}/></section>;return <><div className="page-heading"><div><button className="back-link" onClick={onBack}>← All audits</button><h1>{audit.name}</h1><p>Audit code <b>{audit.code}</b> · Created {new Date(audit.createdAt).toLocaleDateString()}</p></div><span className={`status ${audit.status==='Approved'?'approved':audit.status==='Review'?'review':'progress'}`}>{audit.status}</span></div><section className="panel"><div className="panel-heading"><div><h2>Physical count entry</h2><p>Enter the number physically present. A zero is a valid count.</p></div><span className="count-pill">{audit.counts.length}/{products.length} counted</span></div><div className="count-list">{products.map(p=>{const c=audit.counts.find(x=>x.productId===p.id);return <div className="count-line" key={p.id}><div className="count-product"><b>{p.name}</b><small>{p.sku} · {p.variant||p.category} · Expected {p.expected}</small></div><input aria-label={`Count ${p.name}`} type="number" min="0" inputMode="numeric" placeholder="Qty" value={vals[p.id]??(c?String(c.quantity):'')} onChange={e=>setVals({...vals,[p.id]:e.target.value})}/><button className="secondary-btn small" onClick={()=>{const raw=vals[p.id]??(c?String(c.quantity):'');if(raw===''||Number(raw)<0){notify('Enter a valid quantity');return;}onCount(audit.id,p.id,Number(raw));notify('Count saved in this browser')}}>{c?'Update':'Save'}</button></div>})}</div><div className="audit-detail-footer"><span>{audit.counts.length===products.length?'All products counted':'Some products are not counted yet'}</span><div className="button-row"><button className="secondary-btn" onClick={()=>onStatus(audit.id,'Review')}>Submit for review</button><button className="primary-btn" onClick={()=>{if(audit.counts.length<products.length){notify('Count all products before approval');return;}onStatus(audit.id,'Approved');notify('Demo audit marked approved')}}>Approve audit</button></div></div></section></>}
