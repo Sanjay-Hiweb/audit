@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS audits (
   created_by TEXT NOT NULL REFERENCES users(id),
   approved_by TEXT REFERENCES users(id),
   approved_at TEXT,
+  reconciled_at TEXT,
   deadline TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -215,3 +216,12 @@ CREATE TABLE IF NOT EXISTS audit_activity_logs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_activity_logs ON audit_activity_logs(business_id, audit_id, created_at);
+
+-- 10. Security & Brute-Force Rate Limiting
+CREATE TABLE IF NOT EXISTS security_rate_limits (
+  key TEXT PRIMARY KEY,
+  attempts INTEGER NOT NULL DEFAULT 1,
+  locked_until TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_locked ON security_rate_limits(locked_until);

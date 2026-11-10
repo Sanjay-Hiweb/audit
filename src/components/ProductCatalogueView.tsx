@@ -544,3 +544,4 @@ export const ProductCatalogueView: React.FC<ProductCatalogueViewProps> = ({
     </div>
   );
 };
+

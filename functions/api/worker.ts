@@ -180,13 +180,49 @@ registerRoute('POST', '/api/auth/login', async ({ request, env }) => {
     return json({ error: 'Email and password are required.' }, 400);
   }
 
+  // Durable brute-force protection on user login
+  const rateLimitKey = `login:${email}`;
+  const now = new Date().toISOString();
+  const rateRow = await env.DB.prepare(
+    'SELECT attempts, locked_until FROM security_rate_limits WHERE key = ?'
+  )
+    .bind(rateLimitKey)
+    .first<{ attempts: number; locked_until: string | null }>();
+
+  if (rateRow && rateRow.locked_until && rateRow.locked_until > now) {
+    return json({ error: 'Too many failed login attempts. Account access temporarily locked for 15 minutes.' }, 429);
+  }
+
   const user = await env.DB.prepare('SELECT * FROM users WHERE email = ?')
     .bind(email)
     .first<{ id: string; email: string; password_hash: string; display_name: string }>();
 
   if (!user || !(await verifyPassword(password, user.password_hash))) {
-    return json({ error: 'Invalid email or password.' }, 401);
+    const attempts = (rateRow?.attempts || 0) + 1;
+    const lockedUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
+
+    await env.DB.prepare(
+      `INSERT INTO security_rate_limits (key, attempts, locked_until, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         attempts = excluded.attempts,
+         locked_until = excluded.locked_until,
+         updated_at = CURRENT_TIMESTAMP`
+    )
+      .bind(rateLimitKey, attempts, lockedUntil)
+      .run();
+
+    if (attempts >= 5) {
+      return json({ error: 'Too many failed login attempts. Account access temporarily locked for 15 minutes.' }, 429);
+    }
+
+    return json({ error: `Invalid email or password. (${attempts}/5 attempts)` }, 401);
   }
+
+  // Clear rate limits on successful authentication
+  await env.DB.prepare('DELETE FROM security_rate_limits WHERE key = ?')
+    .bind(rateLimitKey)
+    .run();
 
   const token = randomToken(32);
   const tokenHash = await hashString(token);
@@ -1018,7 +1054,7 @@ registerRoute('POST', '/api/audits/:id/recount-request', async ({ request, env, 
   return json({ success: true });
 });
 
-// Reconcile approved audit with current inventory balances
+// Reconcile approved audit with current inventory balances (Atomic & Idempotent)
 registerRoute('POST', '/api/audits/:id/reconcile', async ({ request, env, params }) => {
   const user = await getCurrentUser(request, env.DB);
   if (!user) return json({ error: 'Unauthorized' }, 401);
@@ -1039,17 +1075,31 @@ registerRoute('POST', '/api/audits/:id/reconcile', async ({ request, env, params
   if (audit.status !== 'approved') {
     return json({ error: 'Audit must be approved before reconciling inventory' }, 400);
   }
+  if (audit.reconciled_at) {
+    return json({ error: 'Audit has already been reconciled with inventory balances.' }, 409);
+  }
 
-  // Get all count entries
+  // Get frozen expected snapshot quantities
+  const { results: snapshots } = await env.DB.prepare(
+    'SELECT variant_id, expected_quantity FROM audit_expected_snapshots WHERE audit_id = ?'
+  )
+    .bind(auditId)
+    .all<{ variant_id: string; expected_quantity: number | null }>();
+  const snapshotMap = new Map(snapshots.map(s => [s.variant_id, s.expected_quantity]));
+
+  // Get all count entries (grouped by variant to prevent duplicate lines)
   const { results: counts } = await env.DB.prepare(
     `SELECT variant_id, COALESCE(resolved_quantity, quantity) as final_quantity
      FROM audit_count_entries
-     WHERE audit_id = ?`
+     WHERE audit_id = ? AND status != 'draft'
+     GROUP BY variant_id`
   )
     .bind(auditId)
     .all<{ variant_id: string; final_quantity: number }>();
 
+  const batchStmts: any[] = [];
   let adjustedCount = 0;
+
   for (const c of counts) {
     const cur = await env.DB.prepare(
       'SELECT quantity FROM inventory_balances WHERE business_id = ? AND branch_id = ? AND variant_id = ?'
@@ -1058,10 +1108,19 @@ registerRoute('POST', '/api/audits/:id/reconcile', async ({ request, env, params
       .first<{ quantity: number }>();
 
     const before = cur ? cur.quantity : 0;
-    const after = c.final_quantity;
+    const snapExpected = snapshotMap.get(c.variant_id);
+
+    // Delta reconciliation preserving legitimate post-snapshot stock movements:
+    // varianceDelta = counted - expected_at_snapshot
+    // If snapExpected is null (uncatalogued product found on floor), variance is the counted quantity
+    const varianceDelta = snapExpected !== null && snapExpected !== undefined
+      ? (c.final_quantity - snapExpected)
+      : c.final_quantity;
+
+    const after = Math.max(0, Math.round((before + varianceDelta) * 1000) / 1000);
     const diff = Math.round((after - before) * 1000) / 1000;
 
-    await env.DB.batch([
+    batchStmts.push(
       env.DB.prepare(
         `INSERT INTO inventory_balances (id, business_id, branch_id, variant_id, quantity, updated_at)
          VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -1070,10 +1129,35 @@ registerRoute('POST', '/api/audits/:id/reconcile', async ({ request, env, params
       env.DB.prepare(
         `INSERT INTO inventory_movements (id, business_id, branch_id, variant_id, audit_id, before_quantity, after_quantity, change_quantity, reason, adjusted_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id(), businessId, audit.branch_id, c.variant_id, auditId, before, after, diff, `Reconciled from Audit ${audit.name}`, user.displayName)
-    ]);
+      ).bind(
+        id(),
+        businessId,
+        audit.branch_id,
+        c.variant_id,
+        auditId,
+        before,
+        after,
+        diff,
+        `Reconciled from Audit ${audit.name} (Variance: ${varianceDelta >= 0 ? '+' : ''}${varianceDelta})`,
+        user.displayName
+      )
+    );
     adjustedCount++;
   }
+
+  // Atomically stamp reconciled_at on audit and write activity log
+  batchStmts.push(
+    env.DB.prepare(
+      'UPDATE audits SET reconciled_at = CURRENT_TIMESTAMP WHERE id = ? AND business_id = ?'
+    ).bind(auditId, businessId),
+    env.DB.prepare(
+      `INSERT INTO audit_activity_logs (id, business_id, audit_id, actor, action, details_json)
+       VALUES (?, ?, ?, ?, 'inventory_reconciled', ?)`
+    ).bind(id(), businessId, auditId, user.displayName, JSON.stringify({ adjustedCount, deltaMode: true }))
+  );
+
+  // Execute all updates, ledger inserts, and status stamp in a single atomic transaction
+  await env.DB.batch(batchStmts);
 
   return json({ success: true, count: adjustedCount });
 });
@@ -1188,6 +1272,19 @@ registerRoute('POST', '/api/employee/join', async ({ request, env }) => {
     return json({ error: 'This audit is no longer accepting submissions.' }, 403);
   }
 
+  // Durable brute-force protection: check if PIN attempts are locked
+  const rateLimitKey = `pin:${audit.id}`;
+  const now = new Date().toISOString();
+  const rateRow = await env.DB.prepare(
+    'SELECT attempts, locked_until FROM security_rate_limits WHERE key = ?'
+  )
+    .bind(rateLimitKey)
+    .first<{ attempts: number; locked_until: string | null }>();
+
+  if (rateRow && rateRow.locked_until && rateRow.locked_until > now) {
+    return json({ error: 'Too many failed PIN attempts. Access locked for 15 minutes.' }, 429);
+  }
+
   // Find assignment matching this audit
   const { results: assignments } = await env.DB.prepare(
     `SELECT * FROM audit_assignments
@@ -1207,8 +1304,36 @@ registerRoute('POST', '/api/employee/join', async ({ request, env }) => {
   }
 
   if (!matchingAssignment) {
-    return json({ error: 'Invalid PIN or employee assignment not found.' }, 401);
+    const attempts = (rateRow?.attempts || 0) + 1;
+    const lockedUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
+
+    await env.DB.prepare(
+      `INSERT INTO security_rate_limits (key, attempts, locked_until, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         attempts = excluded.attempts,
+         locked_until = excluded.locked_until,
+         updated_at = CURRENT_TIMESTAMP`
+    )
+      .bind(rateLimitKey, attempts, lockedUntil)
+      .run();
+
+    await env.DB.prepare(
+      `INSERT INTO audit_activity_logs (id, business_id, audit_id, actor, action, details_json)
+       VALUES (?, ?, ?, 'Security', 'pin_failure', ?)`
+    ).bind(id(), audit.business_id, audit.id, JSON.stringify({ attempts, locked: attempts >= 5 }));
+
+    if (attempts >= 5) {
+      return json({ error: 'Too many failed PIN attempts. Access locked for 15 minutes.' }, 429);
+    }
+
+    return json({ error: `Invalid PIN or employee assignment not found. (${attempts}/5 attempts)` }, 401);
   }
+
+  // Clear rate limits on successful PIN entry
+  await env.DB.prepare('DELETE FROM security_rate_limits WHERE key = ?')
+    .bind(rateLimitKey)
+    .run();
 
   // Generate an employee session access token
   const employeeToken = randomToken(32);

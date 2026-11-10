@@ -325,3 +325,4 @@ export const EmployeeManagementView: React.FC<EmployeeManagementViewProps> = ({
     </div>
   );
 };
+

@@ -27,6 +27,19 @@ export function countlyApiPlugin(): Plugin {
         await d1.exec(sql);
       }
 
+      // Safe schema patches for existing databases
+      try { await d1.exec('ALTER TABLE audits ADD COLUMN reconciled_at TEXT;'); } catch {}
+      try {
+        await d1.exec(`
+          CREATE TABLE IF NOT EXISTS security_rate_limits (
+            key TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 1,
+            locked_until TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+      } catch {}
+
       // Automatically seed demo data if no businesses exist
       const checkBiz = await d1.prepare('SELECT COUNT(*) as cnt FROM businesses').first<{ cnt: number }>();
       if (!checkBiz || checkBiz.cnt === 0) {

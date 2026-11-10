@@ -151,7 +151,7 @@ async function run() {
   if (approveRes.status !== 200) throw new Error('Audit approval failed: ' + JSON.stringify(approveRes));
   console.log('✓ Audit approved and locked.');
 
-  // 6. Test Inventory Reconciliation
+  // 6. Test Inventory Reconciliation & Idempotency
   console.log('\nReconciling Inventory from Approved Audit...');
   const reconcileRes = await api(`/api/audits/${demoAudit.id}/reconcile`, {
     method: 'POST',
@@ -161,7 +161,50 @@ async function run() {
   if (reconcileRes.status !== 200) throw new Error('Reconciliation failed: ' + JSON.stringify(reconcileRes));
   console.log(`✓ Inventory reconciled: ${reconcileRes.data.count} items updated.`);
 
-  // 7. Test Tenant Isolation
+  console.log('Testing Reconciliation Idempotency Protection...');
+  const dupReconcileRes = await api(`/api/audits/${demoAudit.id}/reconcile`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ownerToken}` },
+    body: {}
+  });
+  if (dupReconcileRes.status !== 409) {
+    throw new Error('Duplicate reconciliation should have returned 409 Conflict: ' + JSON.stringify(dupReconcileRes));
+  }
+  console.log('✓ Idempotency protected: duplicate reconciliation blocked with 409 Conflict.');
+
+  // 7. Test Durable Rate Limiting on Employee PIN
+  console.log('\nTesting Durable Brute-Force Rate Limiting on Employee PIN...');
+  const secAuditRes = await api('/api/audits', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ownerToken}` },
+    body: { name: 'Security Test Audit', branchId: 'demo-branch-main' }
+  });
+  if (secAuditRes.status !== 201) throw new Error('Failed to create security audit: ' + JSON.stringify(secAuditRes));
+  const secAuditId = secAuditRes.data.auditId;
+  const secJoinCode = secAuditRes.data.joinCode;
+
+  await api(`/api/audits/${secAuditId}/assignments`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ownerToken}` },
+    body: { employeeName: 'Rate Limit Tester', pin: '1234' }
+  });
+
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const failRes = await api('/api/employee/join', {
+      method: 'POST',
+      body: { code: secJoinCode, pin: '9999', employeeName: 'Rate Limit Tester' }
+    });
+    if (failRes.status !== 401) throw new Error(`Expected 401 on attempt ${attempt}: ${JSON.stringify(failRes)}`);
+  }
+  // 5th attempt should lock with 429
+  const lockRes = await api('/api/employee/join', {
+    method: 'POST',
+    body: { code: secJoinCode, pin: '9999', employeeName: 'Rate Limit Tester' }
+  });
+  if (lockRes.status !== 429) throw new Error('5th failed PIN attempt should have triggered 429 Too Many Requests: ' + JSON.stringify(lockRes));
+  console.log('✓ Brute-force rate limiting triggered: 429 Too Many Requests after 5 failed attempts.');
+
+  // 8. Test Tenant Isolation
   console.log('\nTesting Multi-Tenant Isolation...');
   // Register a new independent business
   const bizBRes = await api('/api/auth/register', {
